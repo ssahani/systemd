@@ -731,7 +731,8 @@
       <varlistentry>
         <term><varname>TTL=</varname></term>
         <listitem>
-          <para>Specifies the TTL value to use in outgoing packets. Ranges [1-255].</para>
+          <para>Specifies the TTL value to use in outgoing packets. Takes a number in the range 0-255.
+           When unset, the kernel's default will be used. </para>
         </listitem>
       </varlistentry>
       <varlistentry>

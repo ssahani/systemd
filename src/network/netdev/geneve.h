@@ -21,15 +21,16 @@ typedef enum GeneveDF {
 struct Geneve {
         NetDev meta;
 
+        unsigned ttl;
+
         uint32_t id;
         uint32_t flow_label;
 
         int remote_family;
 
-        uint8_t tos;
-        uint8_t ttl;
-
         uint16_t dest_port;
+
+        uint8_t tos;
 
         bool udpcsum;
         bool udp6zerocsumtx;
