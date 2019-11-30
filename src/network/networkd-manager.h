@@ -17,6 +17,8 @@
 #include "networkd-link.h"
 #include "networkd-network.h"
 
+#include "ovs/ovsdb.h"
+
 struct Manager {
         sd_netlink *rtnl;
         /* lazy initialized */
@@ -26,6 +28,7 @@ struct Manager {
         sd_bus *bus;
         sd_device_monitor *device_monitor;
         Hashmap *polkit_registry;
+        OVSClient *ovs_db_client;
 
         bool enumerating:1;
         bool dirty:1;

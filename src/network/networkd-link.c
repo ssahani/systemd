@@ -867,6 +867,7 @@ static int link_join_netdevs_after_configured(Link *link) {
 static void link_enter_configured(Link *link) {
         assert(link);
         assert(link->network);
+        int r;
 
         if (link->state != LINK_STATE_CONFIGURING)
                 return;

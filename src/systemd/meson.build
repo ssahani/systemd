@@ -12,6 +12,7 @@ _systemd_headers = '''
         sd-journal.h
         sd-login.h
         sd-messages.h
+        sd-ovsdb.h
 '''.split()
 
 # https://github.com/mesonbuild/meson/issues/1633

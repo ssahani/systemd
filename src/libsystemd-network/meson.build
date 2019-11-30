@@ -40,6 +40,9 @@ sources = files('''
         lldp-neighbor.h
         lldp-neighbor.c
         sd-lldp.c
+        sd-ovsdb.c
+        ovsdb-message.c
+        ovsdb-internal.h
 '''.split())
 
 network_internal_h = files('network-internal.h')

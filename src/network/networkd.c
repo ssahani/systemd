@@ -15,10 +15,12 @@
 #include "networkd-manager.h"
 #include "signal-util.h"
 #include "user-util.h"
+#include "ovs/ovsdb.h"
 
 static int run(int argc, char *argv[]) {
         _cleanup_(notify_on_cleanup) const char *notify_message = NULL;
         _cleanup_(manager_freep) Manager *m = NULL;
+        OVSClient *ovs_db_client;
         const char *user = "systemd-network";
         uid_t uid;
         gid_t gid;
@@ -41,6 +43,10 @@ static int run(int argc, char *argv[]) {
         r = mkdir_safe_label("/run/systemd/netif", 0755, uid, gid, MKDIR_WARN_MODE);
         if (r < 0)
                 log_warning_errno(r, "Could not create runtime directory: %m");
+
+        r = open_vswitch_client_configure(&ovs_db_client);
+        if (r < 0)
+                return r;
 
         /* Drop privileges, but only if we have been started as root. If we are not running as root we assume all
          * privileges are already dropped. */
@@ -116,6 +122,8 @@ static int run(int argc, char *argv[]) {
                 return log_error_errno(r, "Could not start manager: %m");
 
         log_info("Enumeration completed");
+
+        m->ovs_db_client = ovs_db_client;
 
         notify_message = notify_start(NOTIFY_READY, NOTIFY_STOPPING);
 
