@@ -165,7 +165,6 @@ int sd_dhcp_server_new(sd_dhcp_server **ret, int ifindex) {
                 return -ENOMEM;
 
         server->n_ref = 1;
-        server->fd_raw = -1;
         server->fd = -1;
         server->address = htobe32(INADDR_ANY);
         server->netmask = htobe32(INADDR_ANY);

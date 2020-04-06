@@ -8,6 +8,7 @@
 #include "sd-device.h"
 #include "sd-dhcp-client.h"
 #include "sd-dhcp-server.h"
+#include "sd-dhcp6-server.h"
 #include "sd-dhcp6-client.h"
 #include "sd-ipv4ll.h"
 #include "sd-lldp.h"
@@ -124,6 +125,7 @@ typedef struct Link {
         LIST_HEAD(Address, pool_addresses);
 
         sd_dhcp_server *dhcp_server;
+        sd_dhcp6_server *dhcp6_server;
 
         sd_ndisc *ndisc;
         Set *ndisc_rdnss;

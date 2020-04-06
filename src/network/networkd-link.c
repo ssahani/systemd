@@ -212,6 +212,15 @@ static bool link_radv_enabled(Link *link) {
         return link->network->router_prefix_delegation != RADV_PREFIX_DELEGATION_NONE;
 }
 
+static bool link_dhcp6_server_enabled(Link *link) {
+        assert(link);
+
+        if (!link_ipv6ll_enabled(link))
+                return false;
+
+        return link->network->dhcp6_server;
+}
+
 static bool link_ipv4_forward_enabled(Link *link) {
         assert(link);
 
@@ -1303,6 +1312,15 @@ static int link_request_set_addresses(Link *link) {
                         return r;
                 log_link_debug(link, "Offering DHCPv4 leases");
         }
+
+      if (link_dhcp6_server_enabled(link) && (link->flags & IFF_UP)) {
+                r = dhcp6_server_configure(link);
+                if (r < 0)
+                        return r;
+                log_link_debug(link, "Offering DHCPv6 leases");
+        }
+
+
 
         if (link->address_messages == 0) {
                 link->addresses_configured = true;
@@ -2860,6 +2878,16 @@ static int link_configure(Link *link) {
 
         if (link_radv_enabled(link)) {
                 r = radv_configure(link);
+                if (r < 0)
+                        return r;
+        }
+
+        if (link_dhcp6_server_enabled(link)) {
+                r = sd_dhcp6_server_new(&link->dhcp6_server, link->ifindex);
+                if (r < 0)
+                        return r;
+
+                r = sd_dhcp6_server_attach_event(link->dhcp6_server, NULL, 0);
                 if (r < 0)
                         return r;
         }

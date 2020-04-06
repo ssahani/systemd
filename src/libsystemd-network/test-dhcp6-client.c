@@ -877,7 +877,7 @@ int dhcp6_network_send_udp_socket(int s, struct in6_addr *server_address,
         return len;
 }
 
-int dhcp6_network_bind_udp_socket(int index, struct in6_addr *local_address) {
+int dhcp6_network_bind_udp_socket(int index, struct in6_addr *local_address, uint16_t port) {
         assert_se(index == test_index);
 
         if (socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0, test_dhcp_fd) < 0)

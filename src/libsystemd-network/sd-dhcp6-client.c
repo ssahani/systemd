@@ -1443,7 +1443,7 @@ int sd_dhcp6_client_start(sd_dhcp6_client *client) {
                 return r;
 
         if (client->fd < 0) {
-                r = dhcp6_network_bind_udp_socket(client->ifindex, &client->local_address);
+                r = dhcp6_network_bind_udp_socket(client->ifindex, &client->local_address, DHCP6_PORT_CLIENT);
                 if (r < 0) {
                         _cleanup_free_ char *p = NULL;
 

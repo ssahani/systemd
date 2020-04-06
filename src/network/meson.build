@@ -63,6 +63,8 @@ sources = files('''
         networkd-dhcp-common.h
         networkd-dhcp-server.c
         networkd-dhcp-server.h
+        networkd-dhcp6-server.c
+        networkd-dhcp6-server.h
         networkd-dhcp4.c
         networkd-dhcp4.h
         networkd-dhcp6.c

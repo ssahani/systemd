@@ -17,10 +17,10 @@
 #include "fd-util.h"
 #include "socket-util.h"
 
-int dhcp6_network_bind_udp_socket(int index, struct in6_addr *local_address) {
+int dhcp6_network_bind_udp_socket(int index, struct in6_addr *local_address, uint16_t port) {
         union sockaddr_union src = {
                 .in6.sin6_family = AF_INET6,
-                .in6.sin6_port = htobe16(DHCP6_PORT_CLIENT),
+                .in6.sin6_port = htobe16(port),
                 .in6.sin6_scope_id = index,
         };
         _cleanup_close_ int s = -1;
@@ -51,6 +51,7 @@ int dhcp6_network_bind_udp_socket(int index, struct in6_addr *local_address) {
         if (r < 0)
                 return -errno;
 
+        printf("bind success ----------------------------------------\n");
         return TAKE_FD(s);
 }
 

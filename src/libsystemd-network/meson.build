@@ -3,12 +3,14 @@
 sources = files('''
         sd-dhcp-client.c
         sd-dhcp-server.c
+        sd-dhcp6-server.c
         dhcp-client-internal.h
         dhcp-network.c
         dhcp-option.c
         dhcp-packet.c
         dhcp-internal.h
         dhcp-server-internal.h
+        dhcp6-server-internal.h
         dhcp-protocol.h
         dhcp-lease-internal.h
         sd-dhcp-lease.c

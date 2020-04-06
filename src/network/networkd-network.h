@@ -18,6 +18,7 @@
 #include "networkd-dhcp-common.h"
 #include "networkd-dhcp4.h"
 #include "networkd-dhcp-server.h"
+#include "networkd-dhcp6-server.h"
 #include "networkd-fdb.h"
 #include "networkd-ipv6-proxy-ndp.h"
 #include "networkd-lldp-rx.h"
@@ -160,6 +161,9 @@ struct Network {
         usec_t dhcp_server_default_lease_time_usec, dhcp_server_max_lease_time_usec;
         uint32_t dhcp_server_pool_offset;
         uint32_t dhcp_server_pool_size;
+
+        /* DHCP6 Server Support */
+        bool dhcp6_server;
 
         /* IPV4LL Support */
         AddressFamily link_local;
