@@ -10,6 +10,7 @@
 #include "resolved-dnssd.h"
 #include "resolved-manager.h"
 #include "resolved-dns-search-domain.h"
+#include "resolved-dns-stub.h"
 #include "dns-domain.h"
 #include "socket-netlink.h"
 #include "specifier.h"
@@ -26,6 +27,48 @@ static const char* const dns_stub_listener_mode_table[_DNS_STUB_LISTENER_MODE_MA
         [DNS_STUB_LISTENER_YES] = "yes",
 };
 DEFINE_STRING_TABLE_LOOKUP_WITH_BOOLEAN(dns_stub_listener_mode, DnsStubListenerMode, DNS_STUB_LISTENER_YES);
+
+static void dns_stub_listener_extra_address_hash_func(const void *a, struct siphash *state) {
+        const DNSStubListenerExtra *s = a;
+
+        assert(s);
+
+        siphash24_compress(&s->address, FAMILY_ADDRESS_SIZE(socket_address_family(&s->address)), state);
+        siphash24_compress(&socket_address_family(&s->address), sizeof(s->address.type), state);
+        if (socket_address_family(&s->address) == AF_INET)
+                siphash24_compress(&s->address.sockaddr.in.sin_port, sizeof(s->address.sockaddr.in.sin_port), state);
+        else
+                siphash24_compress(&s->address.sockaddr.in6.sin6_port, sizeof(s->address.sockaddr.in6.sin6_port), state);
+}
+
+static int dns_stub_listener_extra_address_compare_func(const void *a, const void *b) {
+        const DNSStubListenerExtra *x = a, *y = b;
+        int r;
+
+        assert(x);
+        assert(y);
+
+        if (socket_address_family(&x->address) == AF_INET)
+                r = CMP(x->address.sockaddr.in.sin_port , y->address.sockaddr.in.sin_port);
+        else
+                r = CMP(y->address.sockaddr.in6.sin6_port, y->address.sockaddr.in6.sin6_port);
+        if (r != 0)
+                return r;
+
+        r = CMP(socket_address_family(&x->address), socket_address_family(&y->address));
+        if (r != 0)
+                return r;
+
+        return memcmp(&x->address, &y->address, FAMILY_ADDRESS_SIZE(socket_address_family(&x->address)));
+}
+
+DEFINE_PRIVATE_HASH_OPS_WITH_VALUE_DESTRUCTOR(
+                dns_stub_listener_extra_address_hash_ops,
+                void,
+                dns_stub_listener_extra_address_hash_func,
+                dns_stub_listener_extra_address_compare_func,
+                DNSStubListenerExtra,
+                free);
 
 static int manager_add_dns_server_by_string(Manager *m, DnsServerType type, const char *word) {
         union in_addr_union address;
@@ -219,7 +262,18 @@ int config_parse_search_domains(
         return 0;
 }
 
-int config_parse_dnssd_service_name(const char *unit, const char *filename, unsigned line, const char *section, unsigned section_line, const char *lvalue, int ltype, const char *rvalue, void *data, void *userdata) {
+int config_parse_dnssd_service_name(
+                const char *unit,
+                const char *filename,
+                unsigned line,
+                const char *section,
+                unsigned section_line,
+                const char *lvalue,
+                int ltype,
+                const char *rvalue,
+                void *data,
+                void *userdata) {
+
         static const Specifier specifier_table[] = {
                 { 'm', specifier_machine_id,      NULL },
                 { 'b', specifier_boot_id,         NULL },
@@ -262,7 +316,18 @@ int config_parse_dnssd_service_name(const char *unit, const char *filename, unsi
         return 0;
 }
 
-int config_parse_dnssd_service_type(const char *unit, const char *filename, unsigned line, const char *section, unsigned section_line, const char *lvalue, int ltype, const char *rvalue, void *data, void *userdata) {
+int config_parse_dnssd_service_type(
+                const char *unit,
+                const char *filename,
+                unsigned line,
+                const char *section,
+                unsigned section_line,
+                const char *lvalue,
+                int ltype,
+                const char *rvalue,
+                void *data,
+                void *userdata) {
+
         DnssdService *s = userdata;
         int r;
 
@@ -288,7 +353,18 @@ int config_parse_dnssd_service_type(const char *unit, const char *filename, unsi
         return 0;
 }
 
-int config_parse_dnssd_txt(const char *unit, const char *filename, unsigned line, const char *section, unsigned section_line, const char *lvalue, int ltype, const char *rvalue, void *data, void *userdata) {
+int config_parse_dnssd_txt(
+                const char *unit,
+                const char *filename,
+                unsigned line,
+                const char *section,
+                unsigned section_line,
+                const char *lvalue,
+                int ltype,
+                const char *rvalue,
+                void *data,
+                void *userdata) {
+
         _cleanup_(dnssd_txtdata_freep) DnssdTxtData *txt_data = NULL;
         DnssdService *s = userdata;
         DnsTxtItem *last = NULL;
@@ -372,6 +448,59 @@ int config_parse_dnssd_txt(const char *unit, const char *filename, unsigned line
                 LIST_PREPEND(items, s->txt_data_items, txt_data);
                 txt_data = NULL;
         }
+
+        return 0;
+}
+
+
+int config_parse_dns_stub_listener_extra_address(
+                const char *unit,
+                const char *filename,
+                unsigned line,
+                const char *section,
+                unsigned section_line,
+                const char *lvalue,
+                int ltype,
+                const char *rvalue,
+                void *data,
+                void *userdata) {
+
+        _cleanup_free_ DNSStubListenerExtra *l = NULL;
+        _cleanup_free_ char *k = NULL;
+        Manager *m = userdata;
+        int r;
+
+        assert(filename);
+        assert(lvalue);
+        assert(rvalue);
+        assert(data);
+
+        if (isempty(rvalue)) {
+                m->dns_extra_stub_listeners = ordered_hashmap_free(m->dns_extra_stub_listeners);
+                return 0;
+        }
+
+        r = dns_stub_extra_new(&l);
+        if (r < 0)
+                return r;
+
+        r = socket_address_parse_ip(&l->address, rvalue);
+        if (r < 0) {
+                log_syntax(unit, LOG_ERR, filename, line, r, "Failed to parse address in DnsStubListenExtra='%s', ignoring: %m", rvalue);
+                return 0;
+        }
+
+        r = ordered_hashmap_ensure_put(&m->dns_extra_stub_listeners, &dns_stub_listener_extra_address_hash_ops, l, l);
+        if (r < 0) {
+                if (r == -ENOMEM)
+                        return log_oom();
+
+                log_syntax(unit, LOG_ERR, filename, line, r,
+                           "Failed to store DnsStubListenExtra='%s', ignoring assignment: %m", k ? k : rvalue);
+                return 0;
+        }
+
+        TAKE_PTR(l);
 
         return 0;
 }
