@@ -235,6 +235,72 @@ int socket_address_parse_and_warn(SocketAddress *a, const char *s) {
         return 0;
 }
 
+int socket_address_parse_ip(SocketAddress *a, const char *s) {
+        _cleanup_free_ char *n = NULL;
+        char *e;
+        int r;
+
+        assert(a);
+        assert(s);
+
+        if (*s == '[') {
+                uint16_t port;
+
+                e = strchr(s+1, ']');
+                if (!e)
+                        return -EINVAL;
+
+                n = strndup(s+1, e-s-1);
+                if (!n)
+                        return -ENOMEM;
+
+                errno = 0;
+                if (inet_pton(AF_INET6, n, &a->sockaddr.in6.sin6_addr) <= 0)
+                        return errno_or_else(EINVAL);
+
+                e++;
+                if (*e != ':')
+                        port = 53;
+                else {
+                        e++;
+                        r = parse_ip_port(e, &port);
+                        if (r < 0)
+                                return r;
+                }
+
+                a->sockaddr.in6.sin6_family = AF_INET6;
+                a->sockaddr.in6.sin6_port = htobe16(port);
+                a->size = sizeof(struct sockaddr_in6);
+
+        }  else {
+                uint16_t port = 53;
+
+                e = strchr(s, ':');
+                if (e) {
+                        r = parse_ip_port(e + 1, &port);
+                        if (r < 0)
+                                return r;
+
+                        n = strndup(s, e-s);
+                        if (!n)
+                                return -ENOMEM;
+                }
+
+                r = inet_pton(AF_INET, n ? n : s, &a->sockaddr.in.sin_addr);
+                if (r < 0)
+                        return -errno;
+
+                if (r > 0) {
+                        /* Gotcha, it's a traditional IPv4 address */
+                        a->sockaddr.in.sin_family = AF_INET;
+                        a->sockaddr.in.sin_port = htobe16(port);
+                        a->size = sizeof(struct sockaddr_in);
+                }
+        }
+
+        return 0;
+}
+
 int socket_address_parse_netlink(SocketAddress *a, const char *s) {
         _cleanup_free_ char *word = NULL;
         unsigned group = 0;
@@ -285,6 +351,21 @@ bool socket_address_is(const SocketAddress *a, const char *s, int type) {
         b.type = type;
 
         return socket_address_equal(a, &b);
+}
+
+int socket_address_len(const SocketAddress *a, socklen_t *ret) {
+        assert(a);
+        assert(ret);
+
+        if (!IN_SET(socket_address_family(a), AF_INET, AF_INET6))
+                return -EAFNOSUPPORT;
+
+        if (socket_address_family(a) == AF_INET)
+                *ret = sizeof(a->sockaddr.in);
+        else
+                *ret = sizeof(a->sockaddr.in6);
+
+        return 0;
 }
 
 bool socket_address_is_netlink(const SocketAddress *a, const char *s) {
