@@ -270,6 +270,18 @@
       </varlistentry>
 
       <varlistentry>
+        <term><varname>DNSStubListenerExtra=</varname></term>
+        <listitem><para>Takes an IPv4 or IPv6 address to listen on, optionally prefixed by <literal>:</literal> protocol,
+        <literal>udp</literal> or <literal>tcp</literal> and suffixed by a <literal>:</literal>
+        followed by a numeric port number. May be used multiple times. If the prefix (protocol) is missing, then listen on both
+        <literal>udp</literal> and <literal>tcp</literal>. Each time it is used an additional socket to bind a DNS stub to is
+        allocated and bound to the specified address and port number. Note that this is independent of the primary DNS stub
+        configured with <varname>DnsStubListener=</varname>, and only configures <emphasis>additional</emphasis> sockets to
+        listen on. Defaults to unset.</para>
+        </listitem>
+      </varlistentry>
+
+      <varlistentry>
         <term><varname>ReadEtcHosts=</varname></term>
         <listitem><para>Takes a boolean argument. If <literal>yes</literal> (the default),
         <command>systemd-resolved</command> will read <filename>/etc/hosts</filename>, and try to resolve

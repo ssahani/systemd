@@ -528,3 +528,18 @@ const char *in_addr_full_to_string(struct in_addr_full *a) {
 
         return a->cached_server_string;
 }
+
+int socket_address_len(const SocketAddress *a, socklen_t *ret) {
+        assert(a);
+        assert(ret);
+
+        if (!IN_SET(socket_address_family(a), AF_INET, AF_INET6))
+                return -EAFNOSUPPORT;
+
+        if (socket_address_family(a) == AF_INET)
+                *ret = sizeof(a->sockaddr.in);
+        else
+                *ret = sizeof(a->sockaddr.in6);
+
+        return 0;
+}

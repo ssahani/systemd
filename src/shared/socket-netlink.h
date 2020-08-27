@@ -20,6 +20,8 @@ int socket_address_parse_netlink(SocketAddress *a, const char *s);
 bool socket_address_is(const SocketAddress *a, const char *s, int type);
 bool socket_address_is_netlink(const SocketAddress *a, const char *s);
 
+int socket_address_len(const SocketAddress *a, socklen_t *ret);
+
 int in_addr_port_ifindex_name_from_string_auto(
                 const char *s,
                 int *ret_family,
