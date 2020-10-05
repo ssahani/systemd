@@ -2524,6 +2524,11 @@ IPv6Token=prefixstable:2002:da8:1::</programlisting></para>
           </listitem>
         </varlistentry>
         <varlistentry>
+          <term><varname>Interface=</varname></term>
+          <listitem><para>Specifies the outgoing interface name for FDB entries.</para>
+          </listitem>
+        </varlistentry>
+        <varlistentry>
           <term><varname>AssociatedWith=</varname></term>
           <listitem>
             <para>Specifies where the address is associated with. Takes one of <literal>use</literal>,

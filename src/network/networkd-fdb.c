@@ -71,6 +71,7 @@ static int fdb_entry_new_static(
         *fdb_entry = (FdbEntry) {
                 .network = network,
                 .vni = VXLAN_VID_MAX + 1,
+                .ifindex = -1,
                 .fdb_ntf_flags = NEIGHBOR_CACHE_ENTRY_FLAGS_SELF,
         };
 
@@ -146,6 +147,12 @@ int fdb_entry_configure(Link *link, FdbEntry *fdb_entry) {
                 r = sd_netlink_message_append_u16(req, NDA_VLAN, fdb_entry->vlan_id);
                 if (r < 0)
                         return log_link_error_errno(link, r, "Could not append NDA_VLAN attribute: %m");
+        }
+
+        if (fdb_entry->ifindex > 0) {
+                r = sd_netlink_message_append_u32(req, NDA_IFINDEX, fdb_entry->ifindex);
+                if (r < 0)
+                        return log_link_error_errno(link, r, "Could not append NDA_IFINDEX attribute: %m");
         }
 
         if (!in_addr_is_null(fdb_entry->family, &fdb_entry->destination_addr)) {
@@ -388,6 +395,49 @@ int config_parse_fdb_ntf_flags(
         }
 
         fdb_entry->fdb_ntf_flags = f;
+        fdb_entry = NULL;
+
+        return 0;
+}
+
+int config_parse_fdb_interface(
+                const char *unit,
+                const char *filename,
+                unsigned line,
+                const char *section,
+                unsigned section_line,
+                const char *lvalue,
+                int ltype,
+                const char *rvalue,
+                void *data,
+                void *userdata) {
+
+        _cleanup_(fdb_entry_free_or_set_invalidp) FdbEntry *fdb_entry = NULL;
+        Network *network = userdata;
+        int r, ifindex;
+
+        assert(filename);
+        assert(section);
+        assert(lvalue);
+        assert(rvalue);
+        assert(data);
+
+        r = fdb_entry_new_static(network, filename, section_line, &fdb_entry);
+        if (r < 0)
+                return log_oom();
+
+        if (!ifname_valid(rvalue)) {
+                log_syntax(unit, LOG_WARNING, filename, line, 0, "Failed to parse '%s' interface name, ignoring: %s", lvalue, rvalue);
+                return 0;
+        }
+
+        ifindex = resolve_ifname(NULL, rvalue);
+        if (ifindex < 0) {
+                log_error_errno(r, "Could not resolve Interface='%s': %m", rvalue);
+
+        }
+
+        fdb_entry->ifindex = ifindex;
         fdb_entry = NULL;
 
         return 0;
