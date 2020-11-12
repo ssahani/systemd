@@ -328,6 +328,17 @@ static int manager_rtnl_process_link(sd_netlink *rtnl, sd_netlink_message *messa
 
                 r = link_update(link, message);
                 if (r < 0) {
+                        if (r == -ENODEV) {
+                                log_warning_errno(r, "Could not update non-existent link, dropping: %m");
+
+                                link_drop(link);
+
+                                if (netdev)
+                                        netdev_drop(netdev);
+
+                                return 0;
+                        }
+
                         log_warning_errno(r, "Could not process link message, ignoring: %m");
                         return 0;
                 }
