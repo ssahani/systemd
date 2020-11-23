@@ -147,7 +147,7 @@ static int run(int argc, char *argv[]) {
 
         r = manager_parse_fallback_string(m, NTP_SERVERS);
         if (r < 0)
-                return log_error_errno(r, "Failed to parse fallback server strings: %m");
+                return log_error_errno(r, "Failed to parse fallback server strintls_session: %m");
 
         log_debug("systemd-timesyncd running as pid " PID_FMT, getpid_cached());
 

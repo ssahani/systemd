@@ -3,6 +3,11 @@
 
 #include <sys/timex.h>
 
+#if HAVE_GNUTLS
+#include <gnutls/gnutls.h>
+#include <gnutls/x509.h>
+#endif
+
 #include "sd-bus.h"
 #include "sd-event.h"
 #include "sd-network.h"
@@ -15,6 +20,7 @@
 
 typedef struct Manager Manager;
 
+#include "timesyncd-ntske-protocol.h"
 #include "timesyncd-server.h"
 
 /*
@@ -27,6 +33,7 @@ typedef struct Manager Manager;
 #define NTP_RETRY_INTERVAL_MIN_USEC     (15 * USEC_PER_SEC)
 #define NTP_RETRY_INTERVAL_MAX_USEC     (6 * 60 * USEC_PER_SEC) /* 6 minutes */
 
+
 struct Manager {
         sd_bus *bus;
         sd_event *event;
@@ -35,6 +42,7 @@ struct Manager {
         LIST_HEAD(ServerName, system_servers);
         LIST_HEAD(ServerName, link_servers);
         LIST_HEAD(ServerName, fallback_servers);
+        LIST_HEAD(ServerName, ntske_servers);
 
         bool have_fallbacks:1;
 
@@ -97,6 +105,26 @@ struct Manager {
         struct ntp_msg ntpmsg;
         struct timespec origin_time, dest_time;
         bool spike;
+
+        /* NTSKE */
+        bool ntske;
+        bool ntske_done;
+        int ntske_server_socket;
+        int handshake;
+
+        sd_event *ntske_event;
+        sd_resolve_query *resolve_query_ntske;
+        sd_event_source *ntske_event_receive;
+
+        ServerName *current_ntske_server_name;
+        ServerAddress *current_ntske_server_address;
+
+        NTSKEPacket *ntske_packet;
+#if HAVE_GNUTLS
+        gnutls_session_t tls_session;
+        gnutls_priority_t priority_cache;
+        gnutls_certificate_credentials_t cert_cred;
+#endif
 };
 
 int manager_new(Manager **ret);
@@ -107,6 +135,9 @@ DEFINE_TRIVIAL_CLEANUP_FUNC(Manager*, manager_free);
 void manager_set_server_name(Manager *m, ServerName *n);
 void manager_set_server_address(Manager *m, ServerAddress *a);
 void manager_flush_server_names(Manager *m, ServerType t);
+
+void manager_set_ntske_server_name(Manager *m, ServerName *n);
+void manager_set_ntske_server_address(Manager *m, ServerAddress *a);
 
 int manager_connect(Manager *m);
 void manager_disconnect(Manager *m);

@@ -402,6 +402,7 @@ possible_link_flags = [
         '-Wl,-z,relro',
         '-Wl,-z,now',
         '-fstack-protector',
+        '-lgnutls'
 ]
 
 if cc.get_id() == 'clang'
@@ -2543,6 +2544,7 @@ if conf.get('ENABLE_TIMESYNCD') == 1
                 include_directories : includes,
                 link_with : [timesyncd_link_with],
                 dependencies : [threads,
+                                libgnutls,
                                 libm],
                 install_rpath : rootlibexecdir,
                 install : true,
