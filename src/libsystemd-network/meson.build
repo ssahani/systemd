@@ -16,6 +16,10 @@ sources = files('''
         sd-ipv4acd.c
         arp-util.h
         arp-util.c
+        network-cloud-azure.h
+        network-cloud-azure.c
+        network-cloud-util.h
+        network-cloud-util.c
         network-internal.c
         network-internal.h
         sd-ndisc.c

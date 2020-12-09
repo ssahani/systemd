@@ -3300,6 +3300,7 @@ if conf.get('ENABLE_NETWORKD') == 1
                 link_with : [libsystemd_network,
                              networkd_link_with],
                 install_rpath : rootlibexecdir,
+                dependencies : [libcurl],
                 install : true,
                 install_dir : rootbindir)
 
