@@ -449,6 +449,7 @@ int network_load_one(Manager *manager, OrderedHashmap **networks, const char *fi
                         "IPv6Prefix\0"
                         "IPv6RoutePrefix\0"
                         "LLDP\0"
+                        "MPTCP\0"
                         "TrafficControlQueueingDiscipline\0"
                         "CAN\0"
                         "QDisc\0"
