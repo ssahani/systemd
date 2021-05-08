@@ -336,7 +336,7 @@ libshared = shared_library(
                       libsystemd_static],
         dependencies : [libshared_deps,
                         userspace],
-        install : true,
+        install : false,
         install_dir : rootpkglibdir)
 
 shared_fdisk_sources = files(

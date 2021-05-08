@@ -3,64 +3,55 @@
 sources = files(
         'timesyncd-conf.c',
         'timesyncd-manager.c',
+        'timesyncd-manager.h',
+        'timesyncd-ntp-message.h',
+        'timesyncd-nts-client.c',
+        'timesyncd-nts-client.h',
+        'timesyncd-ntp-extension.c',
+        'timesyncd-ntp-extension.h',
+        'timesyncd-ntske-client.c',
+        'timesyncd-ntske-client.h',
+        'timesyncd-ntske-protocol.c',
+        'timesyncd-ntske-protocol.h',
         'timesyncd-server.c',
 )
 
-systemd_timesyncd_sources = files(
+nts_timesyncd_sources = files(
         'timesyncd.c',
         'timesyncd-bus.c',
 )
 
 sources += custom_target(
-        'timesyncd-gperf.c',
-        input : 'timesyncd-gperf.gperf',
-        output : 'timesyncd-gperf.c',
+        'nts-timesyncd-gperf.c',
+        input : 'nts-timesyncd-gperf.gperf',
+        output : 'nts-timesyncd-gperf.c',
         command : [gperf, '@INPUT@', '--output-file', '@OUTPUT@'])
 
-if get_option('link-timesyncd-shared')
-        timesyncd_link_with = [libshared]
-else
-        timesyncd_link_with = [libsystemd_static,
-                               libshared_static,
-                               libbasic_gcrypt]
-endif
+nts_timesyncd_link_with = [libsystemd_static,
+                           libshared_static,
+                           libbasic_gcrypt]
 
-libtimesyncd_core = static_library(
+nts_libtimesyncd_core = static_library(
         'timesyncd-core',
         sources,
         include_directories : includes,
         dependencies : userspace,
-        link_with : timesyncd_link_with,
+        link_with : nts_timesyncd_link_with,
         build_by_default : false)
 
 custom_target(
-        'timesyncd.conf',
-        input : 'timesyncd.conf.in',
-        output : 'timesyncd.conf',
+        'nts-timesyncd.conf',
+        input : 'nts-timesyncd.conf.in',
+        output : 'nts-timesyncd.conf',
         command : [jinja2_cmdline, '@INPUT@', '@OUTPUT@'],
-        install : conf.get('ENABLE_TIMESYNCD') == 1 and install_sysconfdir_samples,
+        install : true,
         install_dir : pkgsysconfdir)
 
-if conf.get('ENABLE_TIMESYNCD') == 1
-        install_data('org.freedesktop.timesync1.conf',
+        install_data('org.freedesktop.ntstimesync1.conf',
                      install_dir : dbuspolicydir)
-        install_data('org.freedesktop.timesync1.service',
+        install_data('org.freedesktop.ntstimesync1.service',
                      install_dir : dbussystemservicedir)
-        install_data('80-systemd-timesync.list',
+        install_data('80-systemd-ntstimesync.list',
                      install_dir : ntpservicelistdir)
-        install_data('org.freedesktop.timesync1.policy',
+        install_data('org.freedesktop.ntstimesync1.policy',
                      install_dir : polkitpolicydir)
-endif
-
-############################################################
-
-tests += [
-        {
-                'sources' : files('test-timesync.c'),
-                'link_with' : [
-                        libshared,
-                        libtimesyncd_core,
-                ],
-                'dependencies' : libm,
-        },
-]

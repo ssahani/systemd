@@ -9,6 +9,7 @@ static const char * const server_type_table[_SERVER_TYPE_MAX] = {
         [SERVER_FALLBACK] = "fallback",
         [SERVER_LINK]     = "link",
         [SERVER_RUNTIME]  = "runtime",
+        [SERVER_NTSKE]    = "ntske",
 };
 
 DEFINE_PRIVATE_STRING_TABLE_LOOKUP_TO_STRING(server_type, ServerType);
@@ -99,14 +100,19 @@ int server_name_new(
         case SERVER_RUNTIME:
                 LIST_APPEND(names, m->runtime_servers, n);
                 break;
+        case SERVER_NTSKE:
+                LIST_APPEND(names, m->ntske_servers, n);
+                break;
         default:
                 assert_not_reached();
         }
 
-        if (type != SERVER_FALLBACK &&
-            m->current_server_name &&
-            m->current_server_name->type == SERVER_FALLBACK)
+        n->manager = m;
+
+        if (type != SERVER_FALLBACK && type != SERVER_NTSKE && m->current_server_name && m->current_server_name->type == SERVER_FALLBACK)
                 manager_set_server_name(m, NULL);
+        else if (type == SERVER_NTSKE)
+                manager_set_ntske_server_name(m, n);
 
         log_debug("Added new %s server %s.", server_type_to_string(type), string);
 
@@ -131,11 +137,10 @@ ServerName *server_name_free(ServerName *n) {
                         LIST_REMOVE(names, n->manager->fallback_servers, n);
                 else if (n->type == SERVER_RUNTIME)
                         LIST_REMOVE(names, n->manager->runtime_servers, n);
+                else if (n->type == SERVER_NTSKE)
+                        LIST_REMOVE(names, n->manager->ntske_servers, n);
                 else
                         assert_not_reached();
-
-                if (n->manager->current_server_name == n)
-                        manager_set_server_name(n->manager, NULL);
         }
 
         log_debug("Removed server %s.", n->string);
