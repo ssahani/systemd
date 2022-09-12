@@ -498,6 +498,14 @@ int sd_dhcp6_client_set_rapid_commit(sd_dhcp6_client *client, int enable) {
         return 0;
 }
 
+int sd_dhcp6_client_set_send_release(sd_dhcp6_client *client, int enable) {
+        assert_return(client, -EINVAL);
+        assert_return(!sd_dhcp6_client_is_running(client), -EBUSY);
+
+        client->send_release = enable;
+        return 0;
+}
+
 int sd_dhcp6_client_get_lease(sd_dhcp6_client *client, sd_dhcp6_lease **ret) {
         assert_return(client, -EINVAL);
 
@@ -566,6 +574,9 @@ static void client_stop(sd_dhcp6_client *client, int error) {
         DHCP6_CLIENT_DONT_DESTROY(client);
 
         assert(client);
+
+        if (client->send_release)
+                dhcp6_client_send_release_message(client);
 
         client_notify(client, error);
 
@@ -790,6 +801,60 @@ int dhcp6_client_send_message(sd_dhcp6_client *client) {
                 if (r < 0)
                         return r;
         }
+
+        /* RFC 8415 Section 21.9.
+         * A client MUST include an Elapsed Time option in messages to indicate how long the client has
+         * been trying to complete a DHCP message exchange. */
+        elapsed_usec = MIN(usec_sub_unsigned(time_now, client->transaction_start) / USEC_PER_MSEC / 10, (usec_t) UINT16_MAX);
+        elapsed_time = htobe16(elapsed_usec);
+        r = dhcp6_option_append(&opt, &optlen, SD_DHCP6_OPTION_ELAPSED_TIME, sizeof(elapsed_time), &elapsed_time);
+        if (r < 0)
+                return r;
+
+        r = dhcp6_network_send_udp_socket(client->fd, &all_servers, message,
+                                          len - optlen);
+        if (r < 0)
+                return r;
+
+        log_dhcp6_client(client, "Sent %s",
+                         dhcp6_message_type_to_string(message->type));
+
+        return 0;
+}
+
+int dhcp6_client_send_release_message(sd_dhcp6_client *client) {
+        _cleanup_free_ DHCP6Message *message = NULL;
+        struct in6_addr all_servers =
+                IN6ADDR_ALL_DHCP6_RELAY_AGENTS_AND_SERVERS_INIT;
+        size_t len, optlen = 512;
+        uint8_t *opt;
+        usec_t elapsed_usec, time_now;
+        be16_t elapsed_time;
+        int r;
+
+        assert(client);
+        assert(client->event);
+
+        r = sd_event_now(client->event, CLOCK_BOOTTIME, &time_now);
+        if (r < 0)
+                return r;
+
+        len = sizeof(DHCP6Message) + optlen;
+
+        message = malloc0(len);
+        if (!message)
+                return -ENOMEM;
+
+        message->transaction_id = client->transaction_id;
+        message->type = DHCP6_MESSAGE_RELEASE;
+
+
+        assert(client->duid_len);
+        r = dhcp6_option_append(&opt, &optlen, SD_DHCP6_OPTION_CLIENTID,
+                                client->duid_len, &client->duid);
+        if (r < 0)
+                return r;
+
 
         /* RFC 8415 Section 21.9.
          * A client MUST include an Elapsed Time option in messages to indicate how long the client has

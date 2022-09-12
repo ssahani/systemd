@@ -141,6 +141,7 @@ UseDNS=
 UseHostname=
 UseDomains=
 RapidCommit=
+SendRelease=
 ForceDHCPv6PDOtherInformation=
 PrefixDelegationHint=
 WithoutRA=
