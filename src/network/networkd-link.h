@@ -15,6 +15,7 @@
 #include "sd-lldp-tx.h"
 #include "sd-ndisc.h"
 #include "sd-radv.h"
+#include "sd-nat464.h"
 #include "sd-netlink.h"
 
 #include "ether-addr-util.h"
@@ -178,6 +179,10 @@ typedef struct Link {
 
         /* This is about LLDP transmission */
         sd_lldp_tx *lldp_tx;
+
+
+        sd_nat464 *nat464;
+        sd_event_source *nat464_expire;
 
         Hashmap *bound_by_links;
         Hashmap *bound_to_links;

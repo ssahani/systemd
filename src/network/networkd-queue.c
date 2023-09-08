@@ -298,6 +298,7 @@ static const char *const request_type_table[_REQUEST_TYPE_MAX] = {
         [REQUEST_TYPE_NETDEV_STACKED]                   = "stacked netdev",
         [REQUEST_TYPE_NEXTHOP]                          = "nexthop",
         [REQUEST_TYPE_RADV]                             = "RADV",
+        [REQUEST_TYPE_NAT464]                           = "NAT464",
         [REQUEST_TYPE_ROUTE]                            = "route",
         [REQUEST_TYPE_ROUTING_POLICY_RULE]              = "routing policy rule",
         [REQUEST_TYPE_SET_LINK_ADDRESS_GENERATION_MODE] = "IPv6LL address generation mode",

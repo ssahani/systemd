@@ -47,6 +47,7 @@
 #include "networkd-link.h"
 #include "networkd-lldp-tx.h"
 #include "networkd-manager.h"
+#include "networkd-nat464.h"
 #include "networkd-ndisc.h"
 #include "networkd-neighbor.h"
 #include "networkd-nexthop.h"
@@ -676,6 +677,12 @@ static int link_acquire_dynamic_conf(Link *link) {
                         return log_link_warning_errno(link, r, "Failed to start LLDP client: %m");
         }
 
+        if (link->nat464) {
+                r = nat464_start(link);
+                if (r < 0)
+                        return log_link_warning_errno(link, r, "Failed to start NAT464: %m");
+        }
+
         return 0;
 }
 
@@ -1115,6 +1122,10 @@ static int link_configure(Link *link) {
                 return r;
 
         r = link_lldp_tx_configure(link);
+        if (r < 0)
+                return r;
+
+        r = link_request_nat464(link);
         if (r < 0)
                 return r;
 

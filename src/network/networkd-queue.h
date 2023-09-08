@@ -31,6 +31,7 @@ typedef enum RequestType {
         REQUEST_TYPE_NETDEV_STACKED,
         REQUEST_TYPE_NEXTHOP,
         REQUEST_TYPE_RADV,
+        REQUEST_TYPE_NAT464,
         REQUEST_TYPE_ROUTE,
         REQUEST_TYPE_ROUTING_POLICY_RULE,
         REQUEST_TYPE_SET_LINK_ADDRESS_GENERATION_MODE, /* Setting IPv6LL address generation mode. */

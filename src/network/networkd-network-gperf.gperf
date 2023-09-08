@@ -105,6 +105,7 @@ Network.VXLAN,                               config_parse_stacked_netdev,       
 Network.Xfrm,                                config_parse_stacked_netdev,                              NETDEV_KIND_XFRM,              offsetof(Network, stacked_netdev_names)
 Network.DHCP,                                config_parse_dhcp,                                        0,                             offsetof(Network, dhcp)
 Network.DHCPServer,                          config_parse_bool,                                        0,                             offsetof(Network, dhcp_server)
+Network.NAT464,                              config_parse_bool,                                        0,                             offsetof(Network, nat464)
 Network.LinkLocalAddressing,                 config_parse_link_local_address_family,                   0,                             offsetof(Network, link_local)
 Network.IPv6LinkLocalAddressGenerationMode,  config_parse_ipv6_link_local_address_gen_mode,            0,                             offsetof(Network, ipv6ll_address_gen_mode)
 Network.IPv6StableSecretAddress,             config_parse_in_addr_non_null,                            AF_INET6,                      offsetof(Network, ipv6ll_stable_secret)

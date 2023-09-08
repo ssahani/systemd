@@ -26,8 +26,15 @@ sources = files(
         'sd-ipv4ll.c',
         'sd-lldp-rx.c',
         'sd-lldp-tx.c',
+        'sd-nat464.c',
         'sd-ndisc.c',
         'sd-radv.c',
+        'sd-radv.c',
+        'nat464-checksum.c',
+        'nat464-ip.c',
+        'nat464-icmp.c',
+        'nat464-translate.c',
+        'nat464-dump.c',
 )
 
 libsystemd_network = static_library(

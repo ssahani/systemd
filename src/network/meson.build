@@ -59,6 +59,7 @@ sources = files(
         'networkd-manager-bus.c',
         'networkd-manager.c',
         'networkd-ndisc.c',
+        'networkd-nat464.c',
         'networkd-neighbor.c',
         'networkd-netlabel.c',
         'networkd-network-bus.c',

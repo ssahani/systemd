@@ -359,6 +359,7 @@ struct Network {
         sd_lldp_multicast_mode_t lldp_multicast_mode; /* LLDP transmission */
         char *lldp_mudurl;  /* LLDP MUD URL */
 
+        bool nat464;
         OrderedHashmap *addresses_by_section;
         Hashmap *routes_by_section;
         Hashmap *nexthops_by_section;
