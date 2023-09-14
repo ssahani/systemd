@@ -26,6 +26,10 @@ static void translate_ipv4_addr_to_ipv6_addr(in_addr_t ip, struct in6_addr *ip6,
 }
 
 int build_ip6_header_from_ip4_packet(sd_nat464 *nat, struct iphdr *iph, struct ip6_hdr *ip6h, size_t payload_length) {
+        assert(nat);
+        assert(iph);
+        assert(ip6h);
+
         ip6h->ip6_vfc = htobe32((0x6 << 28) | (iph->tos << 20));
         ip6h->ip6_plen = htobe16(payload_length);
         ip6h->ip6_nxt = (iph->protocol == IPPROTO_ICMP) ? IPPROTO_ICMPV6 : iph->protocol;
@@ -95,12 +99,14 @@ int fill_ip6_payload_from_ip4_packet(struct iphdr *iph, struct ip6_hdr *ip6h, ui
 }
 
 int fill_ip4_protocol_from_ip6_packet(struct iphdr *iph, struct ip6_hdr *ip6h, uint8_t *payload, size_t payload_length) {
+        assert(iph);
+
         switch (iph->protocol) {
         case IPPROTO_TCP: {
                 struct tcphdr *tcp_header = (struct tcphdr *)payload;
 
                 if (payload_length < sizeof(struct tcphdr))
-                        return -1;
+                        return -EINVAL;
 
                 tcp_header->check = nat464_checksum_fixup_from_ip4_to_ip6(tcp_header->check, iph, ip6h);
                 break;
@@ -108,9 +114,10 @@ int fill_ip4_protocol_from_ip6_packet(struct iphdr *iph, struct ip6_hdr *ip6h, u
         case IPPROTO_UDP: {
                 struct udphdr *udp_header = (struct udphdr *)payload;
 
+                /* Drop UDP packets with no checksum */
                 if (payload_length < sizeof(struct udphdr))
                         if (udp_header->check == 0)
-                                return -1; // Drop UDP packets with no checksum
+                                return -EINVAL;
                 udp_header->check = nat464_checksum_fixup_from_ip4_to_ip6(udp_header->check, iph, ip6h);
                 break;
         }
@@ -149,12 +156,13 @@ int build_ip4_header_from_ip6_packet(sd_nat464 *nat, struct ip6_hdr *ip6h, struc
         assert(iph);
         assert(ip6h);
 
-        iph->version = 4;
-        iph->ihl = 5;
-        iph->tos = (ntohl(ip6h->ip6_vfc) >> 20) & 0xff;
-        iph->tot_len = htobe16(payload_length + sizeof(struct iphdr));
-        iph->ttl = ip6h->ip6_hops;
-        iph->check = 0;
+        *iph = (struct iphdr) {
+                .version = 4,
+                .ihl = 5,
+                .tos = (be32toh(ip6h->ip6_vfc) >> 20) & 0xff,
+                .tot_len = htobe16(payload_length + sizeof(struct iphdr)),
+                .ttl = ip6h->ip6_hops
+       };
 
         if (ip6_fragment) {
                 iph->id = htobe16(ntohl(ip6_fragment->ip6f_ident) & 0xffff);
@@ -163,7 +171,6 @@ int build_ip4_header_from_ip6_packet(sd_nat464 *nat, struct ip6_hdr *ip6h, struc
                         iph->frag_off |= htobe16(IP_MF);
                 iph->protocol = (ip6_fragment->ip6f_nxt == IPPROTO_ICMPV6) ? IPPROTO_ICMP : ip6_fragment->ip6f_nxt;
         } else {
-                iph->id = 0;
                 iph->frag_off = htobe16(IP_DF);
                 iph->protocol = (ip6h->ip6_nxt == IPPROTO_ICMPV6) ? IPPROTO_ICMP : ip6h->ip6_nxt;
         }

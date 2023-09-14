@@ -1,9 +1,5 @@
 /* SPDX-License-Identifier: LGPL-2.1-or-later */
 
-#include <netinet/ip.h>
-#include <netinet/ip6.h>
-#include <netinet/in.h>
-
 #include "nat464-checksum.h"
 
 static uint32_t nat464_checksum_add(uint32_t checksum, const void *data, int length) {
