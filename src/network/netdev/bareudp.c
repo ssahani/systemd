@@ -39,6 +39,12 @@ static int netdev_bare_udp_fill_message_create(NetDev *netdev, Link *link, sd_ne
                         return r;
         }
 
+        if (u->multi_proto_mode) {
+                r = sd_netlink_message_append_flag(m, IFLA_BAREUDP_MULTIPROTO_MODE);
+                if (r < 0)
+                        return r;
+        }
+
         return 0;
 }
 

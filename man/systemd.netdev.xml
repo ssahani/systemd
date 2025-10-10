@@ -1119,6 +1119,15 @@ Ports=eth2</programlisting>
         </listitem>
       </varlistentry>
 
+      <varlistentry>
+        <term><varname>MultiProtoMode=</varname></term>
+        <listitem>
+          <para>Specifies the multi-protocol mode for BareUDP devices. Defaults to unset.</para>
+
+        <xi:include href="version-info.xml" xpointer="v258"/>
+        </listitem>
+      </varlistentry>
+
     </variablelist>
   </refsect1>
 
