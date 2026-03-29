@@ -7,7 +7,6 @@
 #include "networkd-address-label.h"
 #include "networkd-conf.h"
 #include "networkd-manager.h"
-#include "networkd-route.h"
 #include "networkd-speed-meter.h"
 
 int manager_parse_config_file(Manager *m) {
@@ -20,7 +19,6 @@ int manager_parse_config_file(Manager *m) {
                         "Network\0"
                         "IPv6AcceptRA\0"
                         "IPv6AddressLabel\0"
-                        "Route\0"
                         "DHCPv4\0"
                         "DHCPv6\0"
                         "DHCPServer\0"
@@ -38,7 +36,6 @@ int manager_parse_config_file(Manager *m) {
         }
 
         manager_drop_invalid_address_labels(m);
-        manager_drop_invalid_routes(m);
 
         return 0;
 }
