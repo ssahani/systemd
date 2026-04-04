@@ -227,6 +227,66 @@ static int prefix64_new_static(Network *network, const char *filename, unsigned 
         return 0;
 }
 
+static SendRAEncryptedDNS* send_ra_encrypted_dns_free(SendRAEncryptedDNS *dns) {
+        if (!dns)
+                return NULL;
+
+        if (dns->network) {
+                assert(dns->section);
+                hashmap_remove(dns->network->send_ra_encrypted_dns_by_section, dns->section);
+        }
+
+        config_section_free(dns->section);
+        sd_dns_resolver_done(&dns->resolver);
+
+        return mfree(dns);
+}
+
+DEFINE_SECTION_CLEANUP_FUNCTIONS(SendRAEncryptedDNS, send_ra_encrypted_dns_free);
+
+DEFINE_PRIVATE_HASH_OPS_WITH_VALUE_DESTRUCTOR(
+                send_ra_encrypted_dns_hash_ops_by_section,
+                ConfigSection, config_section_hash_func, config_section_compare_func,
+                SendRAEncryptedDNS, send_ra_encrypted_dns_free);
+
+static int send_ra_encrypted_dns_new_static(Network *network, const char *filename, unsigned section_line, SendRAEncryptedDNS **ret) {
+        _cleanup_(config_section_freep) ConfigSection *n = NULL;
+        _cleanup_(send_ra_encrypted_dns_freep) SendRAEncryptedDNS *dns = NULL;
+        int r;
+
+        assert(network);
+        assert(ret);
+        assert(filename);
+        assert(section_line > 0);
+
+        r = config_section_new(filename, section_line, &n);
+        if (r < 0)
+                return r;
+
+        dns = hashmap_get(network->send_ra_encrypted_dns_by_section, n);
+        if (dns) {
+                *ret = TAKE_PTR(dns);
+                return 0;
+        }
+
+        dns = new(SendRAEncryptedDNS, 1);
+        if (!dns)
+                return -ENOMEM;
+
+        *dns = (SendRAEncryptedDNS) {
+                .network = network,
+                .section = TAKE_PTR(n),
+                .lifetime_usec = 0,
+        };
+
+        r = hashmap_ensure_put(&network->send_ra_encrypted_dns_by_section, &send_ra_encrypted_dns_hash_ops_by_section, dns->section, dns);
+        if (r < 0)
+                return r;
+
+        *ret = TAKE_PTR(dns);
+        return 0;
+}
+
 int link_request_radv_addresses(Link *link) {
         Prefix *p;
         int r;
@@ -419,6 +479,28 @@ set_domains:
                         /* valid_until= */ USEC_INFINITY);
 }
 
+static int radv_set_encrypted_dns(Link *link) {
+        SendRAEncryptedDNS *dns;
+        int r;
+
+        assert(link);
+        assert(link->network);
+
+        HASHMAP_FOREACH(dns, link->network->send_ra_encrypted_dns_by_section) {
+                usec_t lifetime = dns->lifetime_usec > 0 ? dns->lifetime_usec : link->network->router_dns_lifetime_usec;
+
+                r = sd_radv_add_encrypted_dns(
+                                link->radv,
+                                &dns->resolver,
+                                lifetime,
+                                /* valid_until= */ USEC_INFINITY);
+                if (r < 0)
+                        return r;
+        }
+
+        return 0;
+}
+
 static int radv_find_uplink(Link *link, Link **ret) {
         int r;
 
@@ -551,6 +633,10 @@ static int radv_configure(Link *link) {
         r = radv_set_domains(link, uplink);
         if (r < 0)
                 return log_link_debug_errno(link, r, "Could not set RA Domains: %m");
+
+        r = radv_set_encrypted_dns(link);
+        if (r < 0)
+                return log_link_debug_errno(link, r, "Could not set RA Encrypted DNS: %m");
 
         if (link->network->router_home_agent_information) {
                 r = sd_radv_set_home_agent(
@@ -806,6 +892,48 @@ static int route_prefix_section_verify(RoutePrefix *p) {
         return 0;
 }
 
+static int send_ra_encrypted_dns_section_verify(SendRAEncryptedDNS *dns) {
+        assert(dns);
+
+        if (section_is_invalid(dns->section))
+                return -EINVAL;
+
+        if (!dns->resolver.auth_name)
+                return log_warning_errno(SYNTHETIC_ERRNO(EINVAL),
+                                         "%s: [IPv6SendRAEncryptedDNS] section without Name= configured. "
+                                         "Ignoring [IPv6SendRAEncryptedDNS] section from line %u.",
+                                         dns->section->filename, dns->section->line);
+
+        if (dns->resolver.priority == 0)
+                return log_warning_errno(SYNTHETIC_ERRNO(EINVAL),
+                                         "%s: [IPv6SendRAEncryptedDNS] section without Priority= configured "
+                                         "or priority is zero (alias mode not supported). "
+                                         "Ignoring [IPv6SendRAEncryptedDNS] section from line %u.",
+                                         dns->section->filename, dns->section->line);
+
+        if (dns->resolver.n_addrs == 0)
+                return log_warning_errno(SYNTHETIC_ERRNO(EINVAL),
+                                         "%s: [IPv6SendRAEncryptedDNS] section without Addresses= configured. "
+                                         "Ignoring [IPv6SendRAEncryptedDNS] section from line %u.",
+                                         dns->section->filename, dns->section->line);
+
+        if (!dns->resolver.transports)
+                return log_warning_errno(SYNTHETIC_ERRNO(EINVAL),
+                                         "%s: [IPv6SendRAEncryptedDNS] section without Transport= configured. "
+                                         "Ignoring [IPv6SendRAEncryptedDNS] section from line %u.",
+                                         dns->section->filename, dns->section->line);
+
+        if ((FLAGS_SET(dns->resolver.transports, SD_DNS_ALPN_HTTP_2_TLS) ||
+             FLAGS_SET(dns->resolver.transports, SD_DNS_ALPN_HTTP_3)) &&
+            !dns->resolver.dohpath)
+                return log_warning_errno(SYNTHETIC_ERRNO(EINVAL),
+                                         "%s: [IPv6SendRAEncryptedDNS] section with HTTP transport but no DoHPath= configured. "
+                                         "Ignoring [IPv6SendRAEncryptedDNS] section from line %u.",
+                                         dns->section->filename, dns->section->line);
+
+        return 0;
+}
+
 void network_adjust_radv(Network *network) {
         assert(network);
 
@@ -835,8 +963,10 @@ void network_adjust_radv(Network *network) {
                 network->pref64_prefixes_by_section = hashmap_free(network->pref64_prefixes_by_section);
         }
 
-        if (!network->router_prefix_delegation)
+        if (!network->router_prefix_delegation) {
+                network->send_ra_encrypted_dns_by_section = hashmap_free(network->send_ra_encrypted_dns_by_section);
                 return;
+        }
 
         /* Below, let's verify router settings, if enabled. */
 
@@ -863,6 +993,11 @@ void network_adjust_radv(Network *network) {
         HASHMAP_FOREACH(pref64, network->pref64_prefixes_by_section)
                  if (section_is_invalid(pref64->section))
                          prefix64_free(pref64);
+
+        SendRAEncryptedDNS *edns;
+        HASHMAP_FOREACH(edns, network->send_ra_encrypted_dns_by_section)
+                if (send_ra_encrypted_dns_section_verify(edns) < 0)
+                        send_ra_encrypted_dns_free(edns);
 }
 
 int config_parse_prefix(
@@ -1397,6 +1532,375 @@ int config_parse_radv_search_domains(
                 if (r < 0)
                         return log_oom();
         }
+}
+
+int config_parse_send_ra_encrypted_dns_name(
+                const char *unit,
+                const char *filename,
+                unsigned line,
+                const char *section,
+                unsigned section_line,
+                const char *lvalue,
+                int ltype,
+                const char *rvalue,
+                void *data,
+                void *userdata) {
+
+        _cleanup_(send_ra_encrypted_dns_free_or_set_invalidp) SendRAEncryptedDNS *dns = NULL;
+        Network *network = ASSERT_PTR(userdata);
+        int r;
+
+        assert(filename);
+        assert(lvalue);
+        assert(rvalue);
+
+        r = send_ra_encrypted_dns_new_static(network, filename, section_line, &dns);
+        if (r < 0)
+                return log_oom();
+
+        if (isempty(rvalue)) {
+                dns->resolver.auth_name = mfree(dns->resolver.auth_name);
+                TAKE_PTR(dns);
+                return 0;
+        }
+
+        r = dns_name_is_valid_ldh(rvalue);
+        if (r < 0) {
+                log_syntax(unit, LOG_WARNING, filename, line, r,
+                           "Failed to check validity of domain name, ignoring: %s", rvalue);
+                return 0;
+        }
+        if (!r) {
+                log_syntax(unit, LOG_WARNING, filename, line, 0,
+                           "Invalid domain name, ignoring: %s", rvalue);
+                return 0;
+        }
+        if (dns_name_is_root(rvalue)) {
+                log_syntax(unit, LOG_WARNING, filename, line, 0,
+                           "Root domain name is not allowed, ignoring: %s", rvalue);
+                return 0;
+        }
+
+        r = free_and_strdup(&dns->resolver.auth_name, rvalue);
+        if (r < 0)
+                return log_oom();
+
+        TAKE_PTR(dns);
+        return 0;
+}
+
+int config_parse_send_ra_encrypted_dns_priority(
+                const char *unit,
+                const char *filename,
+                unsigned line,
+                const char *section,
+                unsigned section_line,
+                const char *lvalue,
+                int ltype,
+                const char *rvalue,
+                void *data,
+                void *userdata) {
+
+        _cleanup_(send_ra_encrypted_dns_free_or_set_invalidp) SendRAEncryptedDNS *dns = NULL;
+        Network *network = ASSERT_PTR(userdata);
+        uint16_t priority;
+        int r;
+
+        assert(filename);
+        assert(lvalue);
+        assert(rvalue);
+
+        r = send_ra_encrypted_dns_new_static(network, filename, section_line, &dns);
+        if (r < 0)
+                return log_oom();
+
+        if (isempty(rvalue)) {
+                dns->resolver.priority = 0;
+                TAKE_PTR(dns);
+                return 0;
+        }
+
+        r = safe_atou16(rvalue, &priority);
+        if (r < 0) {
+                log_syntax(unit, LOG_WARNING, filename, line, r,
+                           "Failed to parse encrypted DNS priority, ignoring: %s", rvalue);
+                return 0;
+        }
+
+        dns->resolver.priority = priority;
+
+        TAKE_PTR(dns);
+        return 0;
+}
+
+int config_parse_send_ra_encrypted_dns_addresses(
+                const char *unit,
+                const char *filename,
+                unsigned line,
+                const char *section,
+                unsigned section_line,
+                const char *lvalue,
+                int ltype,
+                const char *rvalue,
+                void *data,
+                void *userdata) {
+
+        _cleanup_(send_ra_encrypted_dns_free_or_set_invalidp) SendRAEncryptedDNS *dns = NULL;
+        Network *network = ASSERT_PTR(userdata);
+        int r;
+
+        assert(filename);
+        assert(lvalue);
+        assert(rvalue);
+
+        r = send_ra_encrypted_dns_new_static(network, filename, section_line, &dns);
+        if (r < 0)
+                return log_oom();
+
+        if (isempty(rvalue)) {
+                dns->resolver.addrs = mfree(dns->resolver.addrs);
+                dns->resolver.n_addrs = 0;
+                TAKE_PTR(dns);
+                return 0;
+        }
+
+        for (const char *p = rvalue;;) {
+                _cleanup_free_ char *w = NULL;
+                union in_addr_union a;
+
+                r = extract_first_word(&p, &w, NULL, 0);
+                if (r == -ENOMEM)
+                        return log_oom();
+                if (r < 0) {
+                        log_syntax(unit, LOG_WARNING, filename, line, r,
+                                   "Failed to extract word, ignoring: %s", rvalue);
+                        return 0;
+                }
+                if (r == 0)
+                        break;
+
+                r = in_addr_from_string(AF_INET6, w, &a);
+                if (r < 0) {
+                        log_syntax(unit, LOG_WARNING, filename, line, r,
+                                   "Failed to parse IPv6 address, ignoring: %s", w);
+                        continue;
+                }
+
+                if (in6_addr_is_null(&a.in6) || in6_addr_is_multicast(&a.in6) ||
+                    in_addr_is_localhost(AF_INET6, &a)) {
+                        log_syntax(unit, LOG_WARNING, filename, line, 0,
+                                   "Invalid IPv6 address for encrypted DNS, ignoring: %s", w);
+                        continue;
+                }
+
+                if (!GREEDY_REALLOC(dns->resolver.addrs, dns->resolver.n_addrs + 1))
+                        return log_oom();
+
+                dns->resolver.addrs[dns->resolver.n_addrs++] = a;
+        }
+
+        dns->resolver.family = AF_INET6;
+
+        TAKE_PTR(dns);
+        return 0;
+}
+
+int config_parse_send_ra_encrypted_dns_transport(
+                const char *unit,
+                const char *filename,
+                unsigned line,
+                const char *section,
+                unsigned section_line,
+                const char *lvalue,
+                int ltype,
+                const char *rvalue,
+                void *data,
+                void *userdata) {
+
+        _cleanup_(send_ra_encrypted_dns_free_or_set_invalidp) SendRAEncryptedDNS *dns = NULL;
+        Network *network = ASSERT_PTR(userdata);
+        int r;
+
+        assert(filename);
+        assert(lvalue);
+        assert(rvalue);
+
+        r = send_ra_encrypted_dns_new_static(network, filename, section_line, &dns);
+        if (r < 0)
+                return log_oom();
+
+        if (isempty(rvalue)) {
+                dns->resolver.transports = 0;
+                TAKE_PTR(dns);
+                return 0;
+        }
+
+        sd_dns_alpn_flags transports = 0;
+        for (const char *p = rvalue;;) {
+                _cleanup_free_ char *w = NULL;
+
+                r = extract_first_word(&p, &w, NULL, 0);
+                if (r == -ENOMEM)
+                        return log_oom();
+                if (r < 0) {
+                        log_syntax(unit, LOG_WARNING, filename, line, r,
+                                   "Failed to extract word, ignoring: %s", rvalue);
+                        return 0;
+                }
+                if (r == 0)
+                        break;
+
+                if (streq(w, "dot"))
+                        transports |= SD_DNS_ALPN_DOT;
+                else if (streq(w, "h2"))
+                        transports |= SD_DNS_ALPN_HTTP_2_TLS;
+                else if (streq(w, "h3"))
+                        transports |= SD_DNS_ALPN_HTTP_3;
+                else if (streq(w, "doq"))
+                        transports |= SD_DNS_ALPN_DOQ;
+                else {
+                        log_syntax(unit, LOG_WARNING, filename, line, 0,
+                                   "Unknown DNS transport '%s', ignoring.", w);
+                        continue;
+                }
+        }
+
+        dns->resolver.transports = transports;
+
+        TAKE_PTR(dns);
+        return 0;
+}
+
+int config_parse_send_ra_encrypted_dns_port(
+                const char *unit,
+                const char *filename,
+                unsigned line,
+                const char *section,
+                unsigned section_line,
+                const char *lvalue,
+                int ltype,
+                const char *rvalue,
+                void *data,
+                void *userdata) {
+
+        _cleanup_(send_ra_encrypted_dns_free_or_set_invalidp) SendRAEncryptedDNS *dns = NULL;
+        Network *network = ASSERT_PTR(userdata);
+        uint16_t port;
+        int r;
+
+        assert(filename);
+        assert(lvalue);
+        assert(rvalue);
+
+        r = send_ra_encrypted_dns_new_static(network, filename, section_line, &dns);
+        if (r < 0)
+                return log_oom();
+
+        if (isempty(rvalue)) {
+                dns->resolver.port = 0;
+                TAKE_PTR(dns);
+                return 0;
+        }
+
+        r = safe_atou16(rvalue, &port);
+        if (r < 0) {
+                log_syntax(unit, LOG_WARNING, filename, line, r,
+                           "Failed to parse port number, ignoring: %s", rvalue);
+                return 0;
+        }
+
+        dns->resolver.port = port;
+
+        TAKE_PTR(dns);
+        return 0;
+}
+
+int config_parse_send_ra_encrypted_dns_dohpath(
+                const char *unit,
+                const char *filename,
+                unsigned line,
+                const char *section,
+                unsigned section_line,
+                const char *lvalue,
+                int ltype,
+                const char *rvalue,
+                void *data,
+                void *userdata) {
+
+        _cleanup_(send_ra_encrypted_dns_free_or_set_invalidp) SendRAEncryptedDNS *dns = NULL;
+        Network *network = ASSERT_PTR(userdata);
+        int r;
+
+        assert(filename);
+        assert(lvalue);
+        assert(rvalue);
+
+        r = send_ra_encrypted_dns_new_static(network, filename, section_line, &dns);
+        if (r < 0)
+                return log_oom();
+
+        if (isempty(rvalue)) {
+                dns->resolver.dohpath = mfree(dns->resolver.dohpath);
+                TAKE_PTR(dns);
+                return 0;
+        }
+
+        if (!in_charset(rvalue, URI_VALID "{}")) {
+                log_syntax(unit, LOG_WARNING, filename, line, 0,
+                           "Invalid DoH path URI template, ignoring: %s", rvalue);
+                return 0;
+        }
+
+        r = free_and_strdup(&dns->resolver.dohpath, rvalue);
+        if (r < 0)
+                return log_oom();
+
+        TAKE_PTR(dns);
+        return 0;
+}
+
+int config_parse_send_ra_encrypted_dns_lifetime(
+                const char *unit,
+                const char *filename,
+                unsigned line,
+                const char *section,
+                unsigned section_line,
+                const char *lvalue,
+                int ltype,
+                const char *rvalue,
+                void *data,
+                void *userdata) {
+
+        _cleanup_(send_ra_encrypted_dns_free_or_set_invalidp) SendRAEncryptedDNS *dns = NULL;
+        Network *network = ASSERT_PTR(userdata);
+        usec_t usec;
+        int r;
+
+        assert(filename);
+        assert(lvalue);
+        assert(rvalue);
+
+        r = send_ra_encrypted_dns_new_static(network, filename, section_line, &dns);
+        if (r < 0)
+                return log_oom();
+
+        if (isempty(rvalue)) {
+                dns->lifetime_usec = 0;
+                TAKE_PTR(dns);
+                return 0;
+        }
+
+        r = parse_sec(rvalue, &usec);
+        if (r < 0) {
+                log_syntax(unit, LOG_WARNING, filename, line, r,
+                           "Failed to parse lifetime, ignoring: %s", rvalue);
+                return 0;
+        }
+
+        dns->lifetime_usec = usec;
+
+        TAKE_PTR(dns);
+        return 0;
 }
 
 static const char * const radv_prefix_delegation_table[_RADV_PREFIX_DELEGATION_MAX] = {

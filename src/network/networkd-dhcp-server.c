@@ -9,6 +9,7 @@
 #include "dhcp-protocol.h"
 #include "dhcp-server-lease-internal.h"
 #include "dns-domain.h"
+#include "dns-resolver-internal.h"
 #include "errno-util.h"
 #include "extract-word.h"
 #include "fd-util.h"
@@ -27,6 +28,7 @@
 #include "networkd-queue.h"
 #include "networkd-resolve-hook.h"
 #include "networkd-route-util.h"
+#include "parse-util.h"
 #include "path-util.h"
 #include "set.h"
 #include "socket-netlink.h"
@@ -150,6 +152,8 @@ int network_adjust_dhcp_server(Network *network, Set **addresses) {
 
                 network->dhcp_server_address = TAKE_PTR(a);
         }
+
+        network_drop_invalid_dhcp_server_encrypted_dns(network);
 
         return 0;
 }
@@ -745,6 +749,22 @@ static int dhcp4_server_configure(Link *link) {
                         return log_link_error_errno(link, r, "Failed to set DHCPv4 static lease for DHCP server: %m");
         }
 
+        if (!hashmap_isempty(link->network->dhcp_server_encrypted_dns_by_section)) {
+                size_t n_resolvers = hashmap_size(link->network->dhcp_server_encrypted_dns_by_section);
+                _cleanup_free_ sd_dns_resolver *resolvers = new0(sd_dns_resolver, n_resolvers);
+                if (!resolvers)
+                        return log_oom();
+
+                size_t i = 0;
+                DHCPServerEncryptedDNS *dns;
+                HASHMAP_FOREACH(dns, link->network->dhcp_server_encrypted_dns_by_section)
+                        resolvers[i++] = dns->resolver;
+
+                r = sd_dhcp_server_set_dnr(link->dhcp_server, resolvers, n_resolvers);
+                if (r < 0)
+                        return log_link_error_errno(link, r, "Failed to set DNR for DHCP server: %m");
+        }
+
         r = link_start_dhcp4_server(link);
         if (r < 0)
                 return log_link_error_errno(link, r, "Could not start DHCPv4 server instance: %m");
@@ -1016,3 +1036,439 @@ DEFINE_CONFIG_PARSE_ENUM(
                 config_parse_dhcp_server_persist_leases,
                 dhcp_server_persist_leases,
                 DHCPServerPersistLeases);
+
+static DHCPServerEncryptedDNS* dhcp_server_encrypted_dns_free(DHCPServerEncryptedDNS *dns) {
+        if (!dns)
+                return NULL;
+
+        if (dns->network) {
+                assert(dns->section);
+                hashmap_remove(dns->network->dhcp_server_encrypted_dns_by_section, dns->section);
+        }
+
+        config_section_free(dns->section);
+        sd_dns_resolver_done(&dns->resolver);
+
+        return mfree(dns);
+}
+
+DEFINE_SECTION_CLEANUP_FUNCTIONS(DHCPServerEncryptedDNS, dhcp_server_encrypted_dns_free);
+
+DEFINE_PRIVATE_HASH_OPS_WITH_VALUE_DESTRUCTOR(
+                dhcp_server_encrypted_dns_hash_ops_by_section,
+                ConfigSection, config_section_hash_func, config_section_compare_func,
+                DHCPServerEncryptedDNS, dhcp_server_encrypted_dns_free);
+
+static int dhcp_server_encrypted_dns_new_static(Network *network, const char *filename, unsigned section_line, DHCPServerEncryptedDNS **ret) {
+        _cleanup_(config_section_freep) ConfigSection *n = NULL;
+        _cleanup_(dhcp_server_encrypted_dns_freep) DHCPServerEncryptedDNS *dns = NULL;
+        int r;
+
+        assert(network);
+        assert(ret);
+        assert(filename);
+        assert(section_line > 0);
+
+        r = config_section_new(filename, section_line, &n);
+        if (r < 0)
+                return r;
+
+        dns = hashmap_get(network->dhcp_server_encrypted_dns_by_section, n);
+        if (dns) {
+                *ret = TAKE_PTR(dns);
+                return 0;
+        }
+
+        dns = new(DHCPServerEncryptedDNS, 1);
+        if (!dns)
+                return -ENOMEM;
+
+        *dns = (DHCPServerEncryptedDNS) {
+                .network = network,
+                .section = TAKE_PTR(n),
+        };
+
+        r = hashmap_ensure_put(&network->dhcp_server_encrypted_dns_by_section, &dhcp_server_encrypted_dns_hash_ops_by_section, dns->section, dns);
+        if (r < 0)
+                return r;
+
+        *ret = TAKE_PTR(dns);
+        return 0;
+}
+
+static int dhcp_server_encrypted_dns_section_verify(DHCPServerEncryptedDNS *dns) {
+        assert(dns);
+
+        if (section_is_invalid(dns->section))
+                return -EINVAL;
+
+        if (!dns->resolver.auth_name)
+                return log_warning_errno(SYNTHETIC_ERRNO(EINVAL),
+                                         "%s: [DHCPServerEncryptedDNS] section without Name= configured. "
+                                         "Ignoring [DHCPServerEncryptedDNS] section from line %u.",
+                                         dns->section->filename, dns->section->line);
+
+        if (dns->resolver.priority == 0)
+                return log_warning_errno(SYNTHETIC_ERRNO(EINVAL),
+                                         "%s: [DHCPServerEncryptedDNS] section without Priority= configured "
+                                         "or priority is zero (alias mode not supported). "
+                                         "Ignoring [DHCPServerEncryptedDNS] section from line %u.",
+                                         dns->section->filename, dns->section->line);
+
+        if (dns->resolver.n_addrs == 0)
+                return log_warning_errno(SYNTHETIC_ERRNO(EINVAL),
+                                         "%s: [DHCPServerEncryptedDNS] section without Addresses= configured. "
+                                         "Ignoring [DHCPServerEncryptedDNS] section from line %u.",
+                                         dns->section->filename, dns->section->line);
+
+        if (!dns->resolver.transports)
+                return log_warning_errno(SYNTHETIC_ERRNO(EINVAL),
+                                         "%s: [DHCPServerEncryptedDNS] section without Transport= configured. "
+                                         "Ignoring [DHCPServerEncryptedDNS] section from line %u.",
+                                         dns->section->filename, dns->section->line);
+
+        if ((FLAGS_SET(dns->resolver.transports, SD_DNS_ALPN_HTTP_2_TLS) ||
+             FLAGS_SET(dns->resolver.transports, SD_DNS_ALPN_HTTP_3)) &&
+            !dns->resolver.dohpath)
+                return log_warning_errno(SYNTHETIC_ERRNO(EINVAL),
+                                         "%s: [DHCPServerEncryptedDNS] section with HTTP transport but no DoHPath= configured. "
+                                         "Ignoring [DHCPServerEncryptedDNS] section from line %u.",
+                                         dns->section->filename, dns->section->line);
+
+        return 0;
+}
+
+void network_drop_invalid_dhcp_server_encrypted_dns(Network *network) {
+        DHCPServerEncryptedDNS *dns;
+
+        assert(network);
+
+        HASHMAP_FOREACH(dns, network->dhcp_server_encrypted_dns_by_section)
+                if (dhcp_server_encrypted_dns_section_verify(dns) < 0)
+                        dhcp_server_encrypted_dns_free(dns);
+}
+
+int config_parse_dhcp_server_encrypted_dns_name(
+                const char *unit,
+                const char *filename,
+                unsigned line,
+                const char *section,
+                unsigned section_line,
+                const char *lvalue,
+                int ltype,
+                const char *rvalue,
+                void *data,
+                void *userdata) {
+
+        _cleanup_(dhcp_server_encrypted_dns_free_or_set_invalidp) DHCPServerEncryptedDNS *dns = NULL;
+        Network *network = ASSERT_PTR(userdata);
+        int r;
+
+        assert(filename);
+        assert(lvalue);
+        assert(rvalue);
+
+        r = dhcp_server_encrypted_dns_new_static(network, filename, section_line, &dns);
+        if (r < 0)
+                return log_oom();
+
+        if (isempty(rvalue)) {
+                dns->resolver.auth_name = mfree(dns->resolver.auth_name);
+                TAKE_PTR(dns);
+                return 0;
+        }
+
+        r = dns_name_is_valid_ldh(rvalue);
+        if (r < 0) {
+                log_syntax(unit, LOG_WARNING, filename, line, r,
+                           "Failed to check validity of domain name, ignoring: %s", rvalue);
+                return 0;
+        }
+        if (!r) {
+                log_syntax(unit, LOG_WARNING, filename, line, 0,
+                           "Invalid domain name, ignoring: %s", rvalue);
+                return 0;
+        }
+        if (dns_name_is_root(rvalue)) {
+                log_syntax(unit, LOG_WARNING, filename, line, 0,
+                           "Root domain name is not allowed, ignoring: %s", rvalue);
+                return 0;
+        }
+
+        r = free_and_strdup(&dns->resolver.auth_name, rvalue);
+        if (r < 0)
+                return log_oom();
+
+        TAKE_PTR(dns);
+        return 0;
+}
+
+int config_parse_dhcp_server_encrypted_dns_priority(
+                const char *unit,
+                const char *filename,
+                unsigned line,
+                const char *section,
+                unsigned section_line,
+                const char *lvalue,
+                int ltype,
+                const char *rvalue,
+                void *data,
+                void *userdata) {
+
+        _cleanup_(dhcp_server_encrypted_dns_free_or_set_invalidp) DHCPServerEncryptedDNS *dns = NULL;
+        Network *network = ASSERT_PTR(userdata);
+        uint16_t priority;
+        int r;
+
+        assert(filename);
+        assert(lvalue);
+        assert(rvalue);
+
+        r = dhcp_server_encrypted_dns_new_static(network, filename, section_line, &dns);
+        if (r < 0)
+                return log_oom();
+
+        if (isempty(rvalue)) {
+                dns->resolver.priority = 0;
+                TAKE_PTR(dns);
+                return 0;
+        }
+
+        r = safe_atou16(rvalue, &priority);
+        if (r < 0) {
+                log_syntax(unit, LOG_WARNING, filename, line, r,
+                           "Failed to parse encrypted DNS priority, ignoring: %s", rvalue);
+                return 0;
+        }
+
+        dns->resolver.priority = priority;
+
+        TAKE_PTR(dns);
+        return 0;
+}
+
+int config_parse_dhcp_server_encrypted_dns_addresses(
+                const char *unit,
+                const char *filename,
+                unsigned line,
+                const char *section,
+                unsigned section_line,
+                const char *lvalue,
+                int ltype,
+                const char *rvalue,
+                void *data,
+                void *userdata) {
+
+        _cleanup_(dhcp_server_encrypted_dns_free_or_set_invalidp) DHCPServerEncryptedDNS *dns = NULL;
+        Network *network = ASSERT_PTR(userdata);
+        int r;
+
+        assert(filename);
+        assert(lvalue);
+        assert(rvalue);
+
+        r = dhcp_server_encrypted_dns_new_static(network, filename, section_line, &dns);
+        if (r < 0)
+                return log_oom();
+
+        if (isempty(rvalue)) {
+                dns->resolver.addrs = mfree(dns->resolver.addrs);
+                dns->resolver.n_addrs = 0;
+                TAKE_PTR(dns);
+                return 0;
+        }
+
+        for (const char *p = rvalue;;) {
+                _cleanup_free_ char *w = NULL;
+                union in_addr_union a;
+
+                r = extract_first_word(&p, &w, NULL, 0);
+                if (r == -ENOMEM)
+                        return log_oom();
+                if (r < 0) {
+                        log_syntax(unit, LOG_WARNING, filename, line, r,
+                                   "Failed to extract word, ignoring: %s", rvalue);
+                        return 0;
+                }
+                if (r == 0)
+                        break;
+
+                r = in_addr_from_string(AF_INET, w, &a);
+                if (r < 0) {
+                        log_syntax(unit, LOG_WARNING, filename, line, r,
+                                   "Failed to parse IPv4 address, ignoring: %s", w);
+                        continue;
+                }
+
+                if (in4_addr_is_null(&a.in) || in_addr_is_multicast(AF_INET, &a) ||
+                    in_addr_is_localhost(AF_INET, &a)) {
+                        log_syntax(unit, LOG_WARNING, filename, line, 0,
+                                   "Invalid IPv4 address for encrypted DNS, ignoring: %s", w);
+                        continue;
+                }
+
+                if (!GREEDY_REALLOC(dns->resolver.addrs, dns->resolver.n_addrs + 1))
+                        return log_oom();
+
+                dns->resolver.addrs[dns->resolver.n_addrs++] = a;
+        }
+
+        dns->resolver.family = AF_INET;
+
+        TAKE_PTR(dns);
+        return 0;
+}
+
+int config_parse_dhcp_server_encrypted_dns_transport(
+                const char *unit,
+                const char *filename,
+                unsigned line,
+                const char *section,
+                unsigned section_line,
+                const char *lvalue,
+                int ltype,
+                const char *rvalue,
+                void *data,
+                void *userdata) {
+
+        _cleanup_(dhcp_server_encrypted_dns_free_or_set_invalidp) DHCPServerEncryptedDNS *dns = NULL;
+        Network *network = ASSERT_PTR(userdata);
+        int r;
+
+        assert(filename);
+        assert(lvalue);
+        assert(rvalue);
+
+        r = dhcp_server_encrypted_dns_new_static(network, filename, section_line, &dns);
+        if (r < 0)
+                return log_oom();
+
+        if (isempty(rvalue)) {
+                dns->resolver.transports = 0;
+                TAKE_PTR(dns);
+                return 0;
+        }
+
+        sd_dns_alpn_flags transports = 0;
+        for (const char *p = rvalue;;) {
+                _cleanup_free_ char *w = NULL;
+
+                r = extract_first_word(&p, &w, NULL, 0);
+                if (r == -ENOMEM)
+                        return log_oom();
+                if (r < 0) {
+                        log_syntax(unit, LOG_WARNING, filename, line, r,
+                                   "Failed to extract word, ignoring: %s", rvalue);
+                        return 0;
+                }
+                if (r == 0)
+                        break;
+
+                if (streq(w, "dot"))
+                        transports |= SD_DNS_ALPN_DOT;
+                else if (streq(w, "h2"))
+                        transports |= SD_DNS_ALPN_HTTP_2_TLS;
+                else if (streq(w, "h3"))
+                        transports |= SD_DNS_ALPN_HTTP_3;
+                else if (streq(w, "doq"))
+                        transports |= SD_DNS_ALPN_DOQ;
+                else {
+                        log_syntax(unit, LOG_WARNING, filename, line, 0,
+                                   "Unknown DNS transport '%s', ignoring.", w);
+                        continue;
+                }
+        }
+
+        dns->resolver.transports = transports;
+
+        TAKE_PTR(dns);
+        return 0;
+}
+
+int config_parse_dhcp_server_encrypted_dns_port(
+                const char *unit,
+                const char *filename,
+                unsigned line,
+                const char *section,
+                unsigned section_line,
+                const char *lvalue,
+                int ltype,
+                const char *rvalue,
+                void *data,
+                void *userdata) {
+
+        _cleanup_(dhcp_server_encrypted_dns_free_or_set_invalidp) DHCPServerEncryptedDNS *dns = NULL;
+        Network *network = ASSERT_PTR(userdata);
+        uint16_t port;
+        int r;
+
+        assert(filename);
+        assert(lvalue);
+        assert(rvalue);
+
+        r = dhcp_server_encrypted_dns_new_static(network, filename, section_line, &dns);
+        if (r < 0)
+                return log_oom();
+
+        if (isempty(rvalue)) {
+                dns->resolver.port = 0;
+                TAKE_PTR(dns);
+                return 0;
+        }
+
+        r = safe_atou16(rvalue, &port);
+        if (r < 0) {
+                log_syntax(unit, LOG_WARNING, filename, line, r,
+                           "Failed to parse port number, ignoring: %s", rvalue);
+                return 0;
+        }
+
+        dns->resolver.port = port;
+
+        TAKE_PTR(dns);
+        return 0;
+}
+
+int config_parse_dhcp_server_encrypted_dns_dohpath(
+                const char *unit,
+                const char *filename,
+                unsigned line,
+                const char *section,
+                unsigned section_line,
+                const char *lvalue,
+                int ltype,
+                const char *rvalue,
+                void *data,
+                void *userdata) {
+
+        _cleanup_(dhcp_server_encrypted_dns_free_or_set_invalidp) DHCPServerEncryptedDNS *dns = NULL;
+        Network *network = ASSERT_PTR(userdata);
+        int r;
+
+        assert(filename);
+        assert(lvalue);
+        assert(rvalue);
+
+        r = dhcp_server_encrypted_dns_new_static(network, filename, section_line, &dns);
+        if (r < 0)
+                return log_oom();
+
+        if (isempty(rvalue)) {
+                dns->resolver.dohpath = mfree(dns->resolver.dohpath);
+                TAKE_PTR(dns);
+                return 0;
+        }
+
+        if (!in_charset(rvalue, URI_VALID "{}")) {
+                log_syntax(unit, LOG_WARNING, filename, line, 0,
+                           "Invalid DoH path URI template, ignoring: %s", rvalue);
+                return 0;
+        }
+
+        r = free_and_strdup(&dns->resolver.dohpath, rvalue);
+        if (r < 0)
+                return log_oom();
+
+        TAKE_PTR(dns);
+        return 0;
+}

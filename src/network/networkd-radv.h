@@ -5,6 +5,7 @@
   Copyright © 2017 Intel Corporation. All rights reserved.
 ***/
 
+#include "dns-resolver-internal.h"
 #include "ndisc-option.h"
 #include "networkd-forward.h"
 
@@ -42,6 +43,14 @@ typedef struct Prefix64 {
         sd_ndisc_prefix64 prefix64;
 } Prefix64;
 
+typedef struct SendRAEncryptedDNS {
+        Network *network;
+        ConfigSection *section;
+
+        sd_dns_resolver resolver;
+        usec_t lifetime_usec;
+} SendRAEncryptedDNS;
+
 void network_adjust_radv(Network *network);
 
 int link_request_radv_addresses(Link *link);
@@ -75,3 +84,10 @@ CONFIG_PARSER_PROTOTYPE(config_parse_route_prefix_preference);
 CONFIG_PARSER_PROTOTYPE(config_parse_pref64_prefix);
 CONFIG_PARSER_PROTOTYPE(config_parse_pref64_prefix_lifetime);
 CONFIG_PARSER_PROTOTYPE(config_parse_router_home_agent_lifetime);
+CONFIG_PARSER_PROTOTYPE(config_parse_send_ra_encrypted_dns_name);
+CONFIG_PARSER_PROTOTYPE(config_parse_send_ra_encrypted_dns_priority);
+CONFIG_PARSER_PROTOTYPE(config_parse_send_ra_encrypted_dns_addresses);
+CONFIG_PARSER_PROTOTYPE(config_parse_send_ra_encrypted_dns_transport);
+CONFIG_PARSER_PROTOTYPE(config_parse_send_ra_encrypted_dns_port);
+CONFIG_PARSER_PROTOTYPE(config_parse_send_ra_encrypted_dns_dohpath);
+CONFIG_PARSER_PROTOTYPE(config_parse_send_ra_encrypted_dns_lifetime);

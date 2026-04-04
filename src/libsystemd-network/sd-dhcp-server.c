@@ -14,6 +14,8 @@
 #include "dhcp-server-internal.h"
 #include "dhcp-server-lease-internal.h"
 #include "dns-domain.h"
+#include "dns-packet.h"
+#include "dns-resolver-internal.h"
 #include "errno-util.h"
 #include "fd-util.h"
 #include "in-addr-util.h"
@@ -25,6 +27,7 @@
 #include "siphash24.h"
 #include "socket-util.h"
 #include "string-util.h"
+#include "strv.h"
 #include "unaligned.h"
 
 #define DHCP_DEFAULT_LEASE_TIME_USEC USEC_PER_HOUR
@@ -140,6 +143,8 @@ static sd_dhcp_server *dhcp_server_free(sd_dhcp_server *server) {
 
         ordered_set_free(server->extra_options);
         ordered_set_free(server->vendor_options);
+
+        free(server->dnr_option_data);
 
         free(server->agent_circuit_id);
         free(server->agent_remote_id);
@@ -704,6 +709,16 @@ static int server_send_offer_or_ack(
                                 &packet->dhcp, req->max_optlen, &offset, 0,
                                 SD_DHCP_OPTION_IPV6_ONLY_PREFERRED,
                                 sizeof(sec), &sec);
+                if (r < 0)
+                        return r;
+        }
+
+        if (server->dnr_option_data && server->dnr_option_data_size > 0) {
+                r = dhcp_option_append(
+                                &packet->dhcp, req->max_optlen, &offset, 0,
+                                SD_DHCP_OPTION_V4_DNR,
+                                server->dnr_option_data_size,
+                                server->dnr_option_data);
                 if (r < 0)
                         return r;
         }
@@ -1585,6 +1600,142 @@ int sd_dhcp_server_set_smtp(sd_dhcp_server *server, const struct in_addr smtp[],
 }
 int sd_dhcp_server_set_lpr(sd_dhcp_server *server, const struct in_addr lpr[], size_t n) {
         return sd_dhcp_server_set_servers(server, SD_DHCP_LEASE_LPR, lpr, n);
+}
+
+int sd_dhcp_server_set_dnr(sd_dhcp_server *server, sd_dns_resolver *resolvers, size_t n) {
+        _cleanup_free_ uint8_t *data = NULL;
+        size_t data_size = 0;
+        int r;
+
+        assert_return(server, -EINVAL);
+        assert_return(!sd_dhcp_server_is_running(server), -EBUSY);
+        assert_return(resolvers || n == 0, -EINVAL);
+
+        if (n == 0) {
+                server->dnr_option_data = mfree(server->dnr_option_data);
+                server->dnr_option_data_size = 0;
+                return 0;
+        }
+
+        /* Build RFC 9463 DHCPv4 option 162 wire format.
+         * Each resolver is encoded as an "Instance Data" entry:
+         *   - Instance Data Length (2 bytes, big-endian)
+         *   - Priority (2 bytes, big-endian)
+         *   - ADN Length (1 byte) + ADN in DNS wire format
+         *   - IPv4 Address Length (1 byte) + IPv4 addresses (4 bytes each)
+         *   - SvcParams (ALPN, port, dohpath)
+         */
+        for (size_t i = 0; i < n; i++) {
+                sd_dns_resolver *res = &resolvers[i];
+
+                if (!res->auth_name || res->n_addrs == 0 || !res->transports)
+                        continue;
+
+                /* Calculate ADN wire format length */
+                _cleanup_free_ uint8_t *adn_wire = NULL;
+                size_t adn_wire_len = strlen(res->auth_name) + 2;
+                adn_wire = new(uint8_t, adn_wire_len);
+                if (!adn_wire)
+                        return -ENOMEM;
+
+                r = dns_name_to_wire_format(res->auth_name, adn_wire, adn_wire_len, /* canonical= */ false);
+                if (r < 0)
+                        return r;
+                adn_wire_len = r;
+
+                /* Calculate SvcParams length */
+                _cleanup_strv_free_ char **alpns = NULL;
+                r = dns_resolver_transports_to_strv(res->transports, &alpns);
+                if (r < 0)
+                        return r;
+                if (strv_isempty(alpns))
+                        continue;
+
+                size_t svc_len = 0;
+                /* ALPN key (2) + value length (2) + ALPN data */
+                size_t alpn_data_len = 0;
+                STRV_FOREACH(alpn, alpns)
+                        alpn_data_len += 1 + strlen(*alpn);
+                svc_len += 4 + alpn_data_len;
+
+                /* Port (optional) */
+                if (res->port > 0)
+                        svc_len += 4 + 2;
+
+                /* DoH path (optional) */
+                if (res->dohpath)
+                        svc_len += 4 + strlen(res->dohpath);
+
+                /* Calculate Instance Data length (everything after the 2-byte length field) */
+                size_t addr_len = res->n_addrs * sizeof(struct in_addr);
+                size_t instance_len = 2 /* priority */ + 1 /* adn len */ + adn_wire_len +
+                                      1 /* addr len */ + addr_len + svc_len;
+
+                /* Allocate space: 2 bytes for instance data length + instance data */
+                if (!GREEDY_REALLOC(data, data_size + 2 + instance_len))
+                        return -ENOMEM;
+
+                uint8_t *p = data + data_size;
+
+                /* Instance Data Length */
+                unaligned_write_be16(p, instance_len);
+                p += 2;
+
+                /* Priority */
+                unaligned_write_be16(p, res->priority);
+                p += 2;
+
+                /* ADN Length + ADN */
+                *p++ = (uint8_t) adn_wire_len;
+                memcpy(p, adn_wire, adn_wire_len);
+                p += adn_wire_len;
+
+                /* IPv4 Address Length + Addresses */
+                *p++ = (uint8_t) addr_len;
+                FOREACH_ARRAY(addr, res->addrs, res->n_addrs) {
+                        memcpy(p, &addr->in, sizeof(struct in_addr));
+                        p += sizeof(struct in_addr);
+                }
+
+                /* SvcParams - ALPN */
+                unaligned_write_be16(p, DNS_SVC_PARAM_KEY_ALPN);
+                p += 2;
+                unaligned_write_be16(p, alpn_data_len);
+                p += 2;
+                STRV_FOREACH(alpn, alpns) {
+                        size_t alen = strlen(*alpn);
+                        *p++ = (uint8_t) alen;
+                        memcpy(p, *alpn, alen);
+                        p += alen;
+                }
+
+                /* SvcParams - Port */
+                if (res->port > 0) {
+                        unaligned_write_be16(p, DNS_SVC_PARAM_KEY_PORT);
+                        p += 2;
+                        unaligned_write_be16(p, 2);
+                        p += 2;
+                        unaligned_write_be16(p, res->port);
+                        p += 2;
+                }
+
+                /* SvcParams - DoHPath */
+                if (res->dohpath) {
+                        size_t dohpath_len = strlen(res->dohpath);
+                        unaligned_write_be16(p, DNS_SVC_PARAM_KEY_DOHPATH);
+                        p += 2;
+                        unaligned_write_be16(p, dohpath_len);
+                        p += 2;
+                        memcpy(p, res->dohpath, dohpath_len);
+                        p += dohpath_len;
+                }
+
+                data_size = p - data;
+        }
+
+        free_and_replace(server->dnr_option_data, data);
+        server->dnr_option_data_size = data_size;
+        return data_size > 0;
 }
 
 int sd_dhcp_server_set_router(sd_dhcp_server *server, const struct in_addr *router) {

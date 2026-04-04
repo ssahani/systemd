@@ -235,6 +235,7 @@ typedef struct Network {
         bool dhcp_server_rapid_commit;
         DHCPServerPersistLeases dhcp_server_persist_leases;
         char *dhcp_server_local_lease_domain;
+        Hashmap *dhcp_server_encrypted_dns_by_section;
 
         /* link-local addressing support */
         AddressFamily link_local;
@@ -396,6 +397,7 @@ typedef struct Network {
         Hashmap *prefixes_by_section;
         Hashmap *route_prefixes_by_section;
         Hashmap *pref64_prefixes_by_section;
+        Hashmap *send_ra_encrypted_dns_by_section;
         Hashmap *rules_by_section;
         Hashmap *dhcp_static_leases_by_section;
         Hashmap *qdiscs_by_section;

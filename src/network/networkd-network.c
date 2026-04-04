@@ -542,6 +542,7 @@ int network_load_one(Manager *manager, OrderedHashmap **networks, const char *fi
                         "DHCPPrefixDelegation\0"
                         "DHCPServer\0"
                         "DHCPServerStaticLease\0"
+                        "DHCPServerEncryptedDNS\0"
                         "IPv6AcceptRA\0"
                         "IPv6NDPProxyAddress\0"
                         "Bridge\0"
@@ -553,6 +554,7 @@ int network_load_one(Manager *manager, OrderedHashmap **networks, const char *fi
                         "IPv6Prefix\0"
                         "IPv6RoutePrefix\0"
                         "IPv6PREF64Prefix\0"
+                        "IPv6SendRAEncryptedDNS\0"
                         "LLDP\0"
                         "TrafficControlQueueingDiscipline\0"
                         "CAN\0"
@@ -847,8 +849,10 @@ static Network *network_free(Network *network) {
         hashmap_free(network->prefixes_by_section);
         hashmap_free(network->route_prefixes_by_section);
         hashmap_free(network->pref64_prefixes_by_section);
+        hashmap_free(network->send_ra_encrypted_dns_by_section);
         hashmap_free(network->rules_by_section);
         hashmap_free(network->dhcp_static_leases_by_section);
+        hashmap_free(network->dhcp_server_encrypted_dns_by_section);
         ordered_hashmap_free(network->sr_iov_by_section);
         hashmap_free(network->qdiscs_by_section);
         hashmap_free(network->tclasses_by_section);

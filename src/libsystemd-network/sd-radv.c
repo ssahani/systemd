@@ -12,6 +12,7 @@
 #include "sd-radv.h"
 
 #include "alloc-util.h"
+#include "dns-resolver-internal.h"
 #include "event-util.h"
 #include "fd-util.h"
 #include "icmp6-packet.h"
@@ -669,6 +670,70 @@ void sd_radv_clear_dnssl(sd_radv *ra) {
         sd_ndisc_option *opt;
         SET_FOREACH(opt, ra->options)
                 if (opt->type == SD_NDISC_OPTION_DNSSL)
+                        ndisc_option_remove(ra->options, opt);
+}
+
+int sd_radv_add_encrypted_dns(
+                sd_radv *ra,
+                const sd_dns_resolver *resolver,
+                uint64_t lifetime_usec,
+                uint64_t valid_until) {
+
+        assert_return(ra, -EINVAL);
+        assert_return(resolver, -EINVAL);
+
+        /* ndisc_option takes ownership of the resolver pointer and will call sd_dns_resolver_unref()
+         * on cleanup, so we must provide a heap-allocated deep copy. */
+        _cleanup_(sd_dns_resolver_unrefp) sd_dns_resolver *copy = new(sd_dns_resolver, 1);
+        if (!copy)
+                return -ENOMEM;
+
+        *copy = (sd_dns_resolver) {
+                .priority = resolver->priority,
+                .family = resolver->family,
+                .transports = resolver->transports,
+                .port = resolver->port,
+        };
+
+        if (resolver->auth_name) {
+                copy->auth_name = strdup(resolver->auth_name);
+                if (!copy->auth_name)
+                        return -ENOMEM;
+        }
+
+        if (resolver->dohpath) {
+                copy->dohpath = strdup(resolver->dohpath);
+                if (!copy->dohpath)
+                        return -ENOMEM;
+        }
+
+        if (resolver->n_addrs > 0) {
+                copy->addrs = newdup(union in_addr_union, resolver->addrs, resolver->n_addrs);
+                if (!copy->addrs)
+                        return -ENOMEM;
+                copy->n_addrs = resolver->n_addrs;
+        }
+
+        int r = ndisc_option_set_encrypted_dns(
+                        &ra->options,
+                        /* offset= */ 0,
+                        copy,
+                        lifetime_usec,
+                        valid_until);
+        if (r < 0)
+                return r;
+
+        TAKE_PTR(copy); /* ownership transferred to ndisc_option */
+        return 0;
+}
+
+void sd_radv_clear_encrypted_dns(sd_radv *ra) {
+        if (!ra)
+                return;
+
+        sd_ndisc_option *opt;
+        SET_FOREACH(opt, ra->options)
+                if (opt->type == SD_NDISC_OPTION_ENCRYPTED_DNS)
                         ndisc_option_remove(ra->options, opt);
 }
 

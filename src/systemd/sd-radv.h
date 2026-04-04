@@ -26,6 +26,7 @@ _SD_BEGIN_DECLARATIONS;
 struct ether_addr;
 struct in6_addr;
 
+typedef struct sd_dns_resolver sd_dns_resolver;
 typedef struct sd_event sd_event;
 typedef struct sd_radv sd_radv;
 
@@ -99,6 +100,12 @@ int sd_radv_add_dnssl(
                 uint64_t lifetime_usec,
                 uint64_t valid_until);
 void sd_radv_clear_dnssl(sd_radv *ra);
+int sd_radv_add_encrypted_dns(
+                sd_radv *ra,
+                const sd_dns_resolver *resolver,
+                uint64_t lifetime_usec,
+                uint64_t valid_until);
+void sd_radv_clear_encrypted_dns(sd_radv *ra);
 int sd_radv_set_captive_portal(sd_radv *ra, const char *portal);
 void sd_radv_unset_captive_portal(sd_radv *ra);
 int sd_radv_add_prefix64(

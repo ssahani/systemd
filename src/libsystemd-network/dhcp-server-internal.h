@@ -77,6 +77,9 @@ typedef struct sd_dhcp_server {
         char *agent_circuit_id;
         char *agent_remote_id;
 
+        uint8_t *dnr_option_data;
+        size_t dnr_option_data_size;
+
         int lease_dir_fd;
         char *lease_file;
 } sd_dhcp_server;
